@@ -26,7 +26,20 @@
 
         <Space
             android:layout_width="match_parent"
-            android:layout_height="200dp" />
+            android:layout_height="100dp" />
+
+        <TextView
+            android:id="@+id/timestamps_text"
+            android:layout_width="match_parent"
+            android:layout_height="100dp"
+            android:layout_margin="10dp"
+            android:scrollbars="vertical"
+            android:textSize="12sp"
+            android:gravity="bottom" />
+
+        <Space
+            android:layout_width="match_parent"
+            android:layout_height="40dp" />
 
         <Button
             android:id="@+id/record_button"
@@ -34,10 +47,6 @@
             android:layout_height="wrap_content"
             android:text="@string/start" />
 
-
-
     </LinearLayout>
-
-
 
 </androidx.constraintlayout.widget.ConstraintLayout>

@@ -6,14 +6,19 @@ import android.media.AudioFormat
 import android.media.AudioRecord
 import android.media.MediaRecorder
 import android.os.Bundle
+import android.text.method.ScrollingMovementMethod
 import android.util.Log
 import android.view.View
 import android.widget.Button
+import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import com.k2fsa.sherpa.onnx.R
 import com.k2fsa.sherpa.onnx.Vad
 import com.k2fsa.sherpa.onnx.getVadModelConfig
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import kotlin.concurrent.thread
 
 
@@ -24,6 +29,7 @@ class MainActivity : AppCompatActivity() {
 
     private lateinit var recordButton: Button
     private lateinit var circle: View
+    private lateinit var timestampsTextView: TextView
 
     private lateinit var vad: Vad
 
@@ -42,6 +48,10 @@ class MainActivity : AppCompatActivity() {
 
     @Volatile
     private var isRecording: Boolean = false
+    
+    private var recordingStartTime: Long = 0
+    private var isSpeaking: Boolean = false
+    private var speechStartTime: Long = 0
 
     override fun onRequestPermissionsResult(
         requestCode: Int, permissions: Array<String>, grantResults: IntArray
@@ -72,6 +82,8 @@ class MainActivity : AppCompatActivity() {
         Log.i(TAG, "Finished initializing model")
 
         circle= findViewById(R.id.powerCircle)
+        timestampsTextView = findViewById(R.id.timestamps_text)
+        timestampsTextView.movementMethod = ScrollingMovementMethod()
 
         recordButton = findViewById(R.id.record_button)
         recordButton.setOnClickListener { onclick() }
@@ -88,6 +100,9 @@ class MainActivity : AppCompatActivity() {
             audioRecord!!.startRecording()
             recordButton.setText(R.string.stop)
             isRecording = true
+            recordingStartTime = System.currentTimeMillis()
+            timestampsTextView.text = ""
+            isSpeaking = false
 
             vad.reset()
             recordingThread = thread(true) {
@@ -114,6 +129,31 @@ class MainActivity : AppCompatActivity() {
             circle.background = resources.getDrawable(R.drawable.red_circle)
         } else {
             circle.background = resources.getDrawable(R.drawable.black_circle)
+        }
+        
+        // Track speech segments for timestamps
+        val currentTime = System.currentTimeMillis()
+        if (isSpeech && !isSpeaking) {
+            // Speech started
+            isSpeaking = true
+            speechStartTime = currentTime
+        } else if (!isSpeech && isSpeaking) {
+            // Speech ended
+            isSpeaking = false
+            val elapsedFromStart = (speechStartTime - recordingStartTime) / 1000.0f
+            val duration = (currentTime - speechStartTime) / 1000.0f
+            
+            // Format similar to silero timestamps
+            val timestamp = "{'start': $elapsedFromStart, 'end': ${elapsedFromStart + duration}}"
+            
+            runOnUiThread {
+                timestampsTextView.append("$timestamp\n")
+                // Auto-scroll to bottom
+                val scrollAmount = timestampsTextView.layout.getLineTop(timestampsTextView.lineCount) - timestampsTextView.height
+                if (scrollAmount > 0) {
+                    timestampsTextView.scrollTo(0, scrollAmount)
+                }
+            }
         }
     }
 
@@ -161,6 +201,9 @@ class MainActivity : AppCompatActivity() {
         while (isRecording) {
             val ret = audioRecord?.read(buffer, 0, buffer.size)
             if (ret != null && ret > 0) {
+                // Convert 16-bit PCM audio samples (range -32768 to 32767) to floating point
+                // by dividing by 32768.0f to normalize them to the range -1.0 to 0.999...
+                // This is standard practice when processing audio for ML models
                 val samples = FloatArray(ret) { buffer[it] / 32768.0f }
 
                 vad.acceptWaveform(samples)
