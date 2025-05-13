@@ -347,9 +347,9 @@ class MainActivity : AppCompatActivity() {
     }
     
     private fun splitAudio(startSec: Float, endSec: Float) {
-        // Add padding to the beginning to capture speech that might start just before detection
-        // 0.3 seconds of padding should help capture initial sounds that might be missed
-        val paddedStartSec = Math.max(0f, startSec - 0.3f)
+        // Increase the padding to better capture initial words
+        // 0.5 seconds of padding should help with longer missed beginnings
+        val paddedStartSec = Math.max(0f, startSec - 0.5f)
         
         val startSample = (paddedStartSec * sampleRateInHz).toInt()
         val endSample = (endSec * sampleRateInHz).toInt()
@@ -382,11 +382,10 @@ class MainActivity : AppCompatActivity() {
         try {
             writeWavFile(file, samplesCopy)
             
-            // Add to UI list with the original timestamps, not the padded ones
-            // This keeps the UI consistent while fixing the audio content
+            // Update the display name to show the actual audio segment time range (with padding)
             val audioSegment = AudioSegment(
                 filename,
-                "Audio ${audioSegments.size + 1}: ${String.format("%.2f", startSec)}s - ${String.format("%.2f", endSec)}s",
+                "Audio ${audioSegments.size + 1}: ${String.format("%.2f", paddedStartSec)}s - ${String.format("%.2f", endSec)}s",
                 file.absolutePath
             )
             
