@@ -347,7 +347,11 @@ class MainActivity : AppCompatActivity() {
     }
     
     private fun splitAudio(startSec: Float, endSec: Float) {
-        val startSample = (startSec * sampleRateInHz).toInt()
+        // Add padding to the beginning to capture speech that might start just before detection
+        // 0.3 seconds of padding should help capture initial sounds that might be missed
+        val paddedStartSec = Math.max(0f, startSec - 0.3f)
+        
+        val startSample = (paddedStartSec * sampleRateInHz).toInt()
         val endSample = (endSec * sampleRateInHz).toInt()
         
         // Create a copy of the PCM samples to avoid concurrent modification
@@ -378,7 +382,8 @@ class MainActivity : AppCompatActivity() {
         try {
             writeWavFile(file, samplesCopy)
             
-            // Add to UI list
+            // Add to UI list with the original timestamps, not the padded ones
+            // This keeps the UI consistent while fixing the audio content
             val audioSegment = AudioSegment(
                 filename,
                 "Audio ${audioSegments.size + 1}: ${String.format("%.2f", startSec)}s - ${String.format("%.2f", endSec)}s",
@@ -390,7 +395,7 @@ class MainActivity : AppCompatActivity() {
                 audioAdapter.notifyDataSetChanged()
             }
             
-            Log.i(TAG, "Created audio segment: $filename, from ${startSec}s to ${endSec}s")
+            Log.i(TAG, "Created audio segment: $filename, from ${paddedStartSec}s to ${endSec}s (with padding)")
         } catch (e: Exception) {
             Log.e(TAG, "Failed to write WAV file", e)
         }
