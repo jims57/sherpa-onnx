@@ -85,7 +85,7 @@
             android:layout_margin="10dp"
             android:scrollbars="vertical"
             android:textSize="12sp"
-            android:gravity="bottom" />
+            android:gravity="top|start" />
 
         <TextView
             android:layout_width="match_parent"
