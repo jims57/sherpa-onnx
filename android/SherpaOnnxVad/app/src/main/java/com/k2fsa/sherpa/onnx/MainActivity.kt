@@ -1,21 +1,33 @@
 package com.k2fsa.sherpa.onnx.vad
 
 import android.Manifest
+import android.content.Context
 import android.content.pm.PackageManager
 import android.media.AudioFormat
+import android.media.AudioManager
 import android.media.AudioRecord
+import android.media.MediaPlayer
 import android.media.MediaRecorder
 import android.os.Bundle
 import android.text.method.ScrollingMovementMethod
 import android.util.Log
+import android.view.LayoutInflater
 import android.view.View
+import android.view.ViewGroup
+import android.widget.ArrayAdapter
 import android.widget.Button
+import android.widget.ListView
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import com.k2fsa.sherpa.onnx.R
 import com.k2fsa.sherpa.onnx.Vad
 import com.k2fsa.sherpa.onnx.getVadModelConfig
+import java.io.File
+import java.io.FileInputStream
+import java.io.FileOutputStream
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -30,6 +42,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var recordButton: Button
     private lateinit var circle: View
     private lateinit var timestampsTextView: TextView
+    private lateinit var audioSegmentsList: ListView
 
     private lateinit var vad: Vad
 
@@ -52,6 +65,12 @@ class MainActivity : AppCompatActivity() {
     private var recordingStartTime: Long = 0
     private var isSpeaking: Boolean = false
     private var speechStartTime: Long = 0
+    
+    private val audioSegments = mutableListOf<AudioSegment>()
+    private val audioAdapter by lazy { AudioSegmentAdapter(this, audioSegments) }
+    
+    private val pcmSamples = mutableListOf<Short>()
+    private var mediaPlayer: MediaPlayer? = null
 
     override fun onRequestPermissionsResult(
         requestCode: Int, permissions: Array<String>, grantResults: IntArray
@@ -84,6 +103,9 @@ class MainActivity : AppCompatActivity() {
         circle= findViewById(R.id.powerCircle)
         timestampsTextView = findViewById(R.id.timestamps_text)
         timestampsTextView.movementMethod = ScrollingMovementMethod()
+        
+        audioSegmentsList = findViewById(R.id.audio_segments_list)
+        audioSegmentsList.adapter = audioAdapter
 
         recordButton = findViewById(R.id.record_button)
         recordButton.setOnClickListener { onclick() }
@@ -103,6 +125,9 @@ class MainActivity : AppCompatActivity() {
             recordingStartTime = System.currentTimeMillis()
             timestampsTextView.text = ""
             isSpeaking = false
+            pcmSamples.clear()
+            audioSegments.clear()
+            audioAdapter.notifyDataSetChanged()
 
             vad.reset()
             recordingThread = thread(true) {
@@ -142,9 +167,10 @@ class MainActivity : AppCompatActivity() {
             isSpeaking = false
             val elapsedFromStart = (speechStartTime - recordingStartTime) / 1000.0f
             val duration = (currentTime - speechStartTime) / 1000.0f
+            val endTime = elapsedFromStart + duration
             
             // Format similar to silero timestamps
-            val timestamp = "{'start': $elapsedFromStart, 'end': ${elapsedFromStart + duration}}"
+            val timestamp = "{'start': $elapsedFromStart, 'end': $endTime}"
             
             runOnUiThread {
                 timestampsTextView.append("$timestamp\n")
@@ -153,11 +179,100 @@ class MainActivity : AppCompatActivity() {
                 if (scrollAmount > 0) {
                     timestampsTextView.scrollTo(0, scrollAmount)
                 }
+                
+                // Split the audio and create WAV file
+                splitAudio(elapsedFromStart, endTime)
             }
         }
     }
+    
+    private fun splitAudio(startSec: Float, endSec: Float) {
+        val startSample = (startSec * sampleRateInHz).toInt()
+        val endSample = (endSec * sampleRateInHz).toInt()
+        
+        if (startSample >= pcmSamples.size || startSample < 0) {
+            Log.e(TAG, "Invalid start sample: $startSample, total samples: ${pcmSamples.size}")
+            return
+        }
+        
+        val endIdx = if (endSample >= pcmSamples.size) pcmSamples.size - 1 else endSample
+        
+        if (endIdx <= startSample) {
+            Log.e(TAG, "Invalid sample range: $startSample to $endIdx")
+            return
+        }
+        
+        val segmentSamples = pcmSamples.subList(startSample, endIdx).toShortArray()
+        
+        // Create WAV file
+        val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss_SSS", Locale.US).format(Date())
+        val filename = "segment_$timestamp.wav"
+        val file = File(filesDir, filename)
+        
+        // Write WAV file
+        try {
+            writeWavFile(file, segmentSamples)
+            
+            // Add to UI list
+            val audioSegment = AudioSegment(
+                filename,
+                "Audio ${audioSegments.size + 1}: ${String.format("%.2f", startSec)}s - ${String.format("%.2f", endSec)}s",
+                file.absolutePath
+            )
+            
+            audioSegments.add(audioSegment)
+            runOnUiThread {
+                audioAdapter.notifyDataSetChanged()
+            }
+            
+            Log.i(TAG, "Created audio segment: $filename, from ${startSec}s to ${endSec}s")
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to write WAV file", e)
+        }
+    }
+    
+    private fun writeWavFile(file: File, samples: ShortArray) {
+        FileOutputStream(file).use { out ->
+            // WAV header
+            val headerSize = 44
+            val dataSize = samples.size * 2  // 2 bytes per sample (16-bit)
+            val totalSize = headerSize + dataSize
+            
+            val header = ByteBuffer.allocate(headerSize)
+            header.order(ByteOrder.LITTLE_ENDIAN)
+            
+            // RIFF header
+            header.put("RIFF".toByteArray())
+            header.putInt(totalSize - 8)  // Total size - 8 bytes
+            header.put("WAVE".toByteArray())
+            
+            // Format chunk
+            header.put("fmt ".toByteArray())
+            header.putInt(16)  // Subchunk1Size (16 for PCM)
+            header.putShort(1)  // AudioFormat (1 for PCM)
+            header.putShort(1)  // NumChannels (1 for mono)
+            header.putInt(sampleRateInHz)  // SampleRate
+            header.putInt(sampleRateInHz * 2)  // ByteRate (SampleRate * NumChannels * BitsPerSample/8)
+            header.putShort(2)  // BlockAlign (NumChannels * BitsPerSample/8)
+            header.putShort(16)  // BitsPerSample
+            
+            // Data chunk
+            header.put("data".toByteArray())
+            header.putInt(dataSize)
+            
+            out.write(header.array())
+            
+            // Write PCM data
+            val dataBuffer = ByteBuffer.allocate(dataSize)
+            dataBuffer.order(ByteOrder.LITTLE_ENDIAN)
+            for (sample in samples) {
+                dataBuffer.putShort(sample)
+            }
+            out.write(dataBuffer.array())
+        }
+    }
 
-    private  fun initVadModel() {
+    private fun initVadModel() {
         val type = 0
         Log.i(TAG, "Select VAD model type ${type}")
         val config = getVadModelConfig(type)
@@ -201,6 +316,13 @@ class MainActivity : AppCompatActivity() {
         while (isRecording) {
             val ret = audioRecord?.read(buffer, 0, buffer.size)
             if (ret != null && ret > 0) {
+                // Store PCM samples for later use
+                synchronized(pcmSamples) {
+                    for (i in 0 until ret) {
+                        pcmSamples.add(buffer[i])
+                    }
+                }
+                
                 // Convert 16-bit PCM audio samples (range -32768 to 32767) to floating point
                 // by dividing by 32768.0f to normalize them to the range -1.0 to 0.999...
                 // This is standard practice when processing audio for ML models
@@ -215,6 +337,55 @@ class MainActivity : AppCompatActivity() {
                     onVad(isSpeechDetected)
                 }
             }
+        }
+    }
+    
+    override fun onDestroy() {
+        super.onDestroy()
+        mediaPlayer?.release()
+        mediaPlayer = null
+    }
+    
+    data class AudioSegment(
+        val filename: String,
+        val displayName: String,
+        val filePath: String
+    )
+    
+    inner class AudioSegmentAdapter(
+        context: Context, 
+        private val segments: List<AudioSegment>
+    ) : ArrayAdapter<AudioSegment>(context, 0, segments) {
+        
+        override fun getView(position: Int, convertView: View?, parent: ViewGroup): View {
+            val view = convertView ?: LayoutInflater.from(context)
+                .inflate(R.layout.audio_item, parent, false)
+            
+            val segment = segments[position]
+            val nameTextView = view.findViewById<TextView>(R.id.audio_segment_name)
+            val playButton = view.findViewById<Button>(R.id.play_button)
+            
+            nameTextView.text = segment.displayName
+            
+            playButton.setOnClickListener {
+                playAudio(segment.filePath)
+            }
+            
+            return view
+        }
+    }
+    
+    private fun playAudio(filePath: String) {
+        try {
+            mediaPlayer?.release()
+            mediaPlayer = MediaPlayer().apply {
+                setAudioStreamType(AudioManager.STREAM_MUSIC)
+                setDataSource(filePath)
+                prepare()
+                start()
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error playing audio", e)
         }
     }
 }
