@@ -190,19 +190,24 @@ class MainActivity : AppCompatActivity() {
         val startSample = (startSec * sampleRateInHz).toInt()
         val endSample = (endSec * sampleRateInHz).toInt()
         
-        if (startSample >= pcmSamples.size || startSample < 0) {
-            Log.e(TAG, "Invalid start sample: $startSample, total samples: ${pcmSamples.size}")
-            return
+        // Create a copy of the PCM samples to avoid concurrent modification
+        val samplesCopy: ShortArray
+        synchronized(pcmSamples) {
+            if (startSample >= pcmSamples.size || startSample < 0) {
+                Log.e(TAG, "Invalid start sample: $startSample, total samples: ${pcmSamples.size}")
+                return
+            }
+            
+            val endIdx = if (endSample >= pcmSamples.size) pcmSamples.size - 1 else endSample
+            
+            if (endIdx <= startSample) {
+                Log.e(TAG, "Invalid sample range: $startSample to $endIdx")
+                return
+            }
+            
+            // Create a copy of the samples we need
+            samplesCopy = pcmSamples.subList(startSample, endIdx).toList().toShortArray()
         }
-        
-        val endIdx = if (endSample >= pcmSamples.size) pcmSamples.size - 1 else endSample
-        
-        if (endIdx <= startSample) {
-            Log.e(TAG, "Invalid sample range: $startSample to $endIdx")
-            return
-        }
-        
-        val segmentSamples = pcmSamples.subList(startSample, endIdx).toShortArray()
         
         // Create WAV file
         val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss_SSS", Locale.US).format(Date())
@@ -211,7 +216,7 @@ class MainActivity : AppCompatActivity() {
         
         // Write WAV file
         try {
-            writeWavFile(file, segmentSamples)
+            writeWavFile(file, samplesCopy)
             
             // Add to UI list
             val audioSegment = AudioSegment(
