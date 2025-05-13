@@ -74,6 +74,7 @@ class MainActivity : AppCompatActivity() {
     
     private val pcmSamples = mutableListOf<Short>()
     private var mediaPlayer: MediaPlayer? = null
+    private var fullAudioPlayer: MediaPlayer? = null
     
     // New full audio components
     private lateinit var fullAudioInfoTextView: TextView
@@ -84,7 +85,7 @@ class MainActivity : AppCompatActivity() {
     private val seekBarUpdateHandler = Handler(Looper.getMainLooper())
     private val seekBarUpdateRunnable = object : Runnable {
         override fun run() {
-            mediaPlayer?.let { player ->
+            fullAudioPlayer?.let { player ->
                 if (player.isPlaying) {
                     val currentPosition = player.currentPosition
                     audioSeekBar.progress = currentPosition
@@ -144,7 +145,7 @@ class MainActivity : AppCompatActivity() {
         audioSeekBar.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
                 if (fromUser) {
-                    mediaPlayer?.seekTo(progress)
+                    fullAudioPlayer?.seekTo(progress)
                 }
             }
             
@@ -153,7 +154,7 @@ class MainActivity : AppCompatActivity() {
             }
             
             override fun onStopTrackingTouch(seekBar: SeekBar?) {
-                mediaPlayer?.let { player ->
+                fullAudioPlayer?.let { player ->
                     if (player.isPlaying) {
                         seekBarUpdateHandler.postDelayed(seekBarUpdateRunnable, 100)
                     }
@@ -267,13 +268,17 @@ class MainActivity : AppCompatActivity() {
         }
         
         try {
-            mediaPlayer?.release()
-            mediaPlayer = MediaPlayer().apply {
+            // Stop any currently playing full audio
+            fullAudioPlayer?.release()
+            
+            // Create a new MediaPlayer for the full audio file
+            fullAudioPlayer = MediaPlayer().apply {
                 setAudioStreamType(AudioManager.STREAM_MUSIC)
                 setDataSource(fullAudioFile!!.absolutePath)
                 setOnCompletionListener {
                     audioSeekBar.progress = 0
                     playFullAudioButton.text = "Play"
+                    seekBarUpdateHandler.removeCallbacks(seekBarUpdateRunnable)
                 }
                 prepare()
                 start()
@@ -281,12 +286,13 @@ class MainActivity : AppCompatActivity() {
             
             // Start updating seek bar
             audioSeekBar.progress = 0
+            seekBarUpdateHandler.removeCallbacks(seekBarUpdateRunnable)
             seekBarUpdateHandler.post(seekBarUpdateRunnable)
             playFullAudioButton.text = "Pause"
             
-            // Update button text on click
+            // Update button click behavior for toggling play/pause
             playFullAudioButton.setOnClickListener {
-                mediaPlayer?.let { player ->
+                fullAudioPlayer?.let { player ->
                     if (player.isPlaying) {
                         player.pause()
                         playFullAudioButton.text = "Play"
@@ -503,6 +509,8 @@ class MainActivity : AppCompatActivity() {
         super.onDestroy()
         mediaPlayer?.release()
         mediaPlayer = null
+        fullAudioPlayer?.release()
+        fullAudioPlayer = null
         durationUpdateHandler.removeCallbacks(durationUpdateRunnable)
         seekBarUpdateHandler.removeCallbacks(seekBarUpdateRunnable)
     }
