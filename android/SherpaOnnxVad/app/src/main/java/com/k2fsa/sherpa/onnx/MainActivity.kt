@@ -9,6 +9,8 @@ import android.media.AudioRecord
 import android.media.MediaPlayer
 import android.media.MediaRecorder
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.text.method.ScrollingMovementMethod
 import android.util.Log
 import android.view.LayoutInflater
@@ -17,6 +19,7 @@ import android.view.ViewGroup
 import android.widget.ArrayAdapter
 import android.widget.Button
 import android.widget.ListView
+import android.widget.SeekBar
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
@@ -71,6 +74,25 @@ class MainActivity : AppCompatActivity() {
     
     private val pcmSamples = mutableListOf<Short>()
     private var mediaPlayer: MediaPlayer? = null
+    
+    // New full audio components
+    private lateinit var fullAudioInfoTextView: TextView
+    private lateinit var playFullAudioButton: Button
+    private lateinit var audioSeekBar: SeekBar
+    private var fullAudioFile: File? = null
+    
+    private val seekBarUpdateHandler = Handler(Looper.getMainLooper())
+    private val seekBarUpdateRunnable = object : Runnable {
+        override fun run() {
+            mediaPlayer?.let { player ->
+                if (player.isPlaying) {
+                    val currentPosition = player.currentPosition
+                    audioSeekBar.progress = currentPosition
+                    seekBarUpdateHandler.postDelayed(this, 100)
+                }
+            }
+        }
+    }
 
     override fun onRequestPermissionsResult(
         requestCode: Int, permissions: Array<String>, grantResults: IntArray
@@ -109,6 +131,35 @@ class MainActivity : AppCompatActivity() {
 
         recordButton = findViewById(R.id.record_button)
         recordButton.setOnClickListener { onclick() }
+        
+        // Initialize full audio UI components
+        fullAudioInfoTextView = findViewById(R.id.full_audio_info)
+        playFullAudioButton = findViewById(R.id.play_full_audio_button)
+        audioSeekBar = findViewById(R.id.audio_seek_bar)
+        
+        playFullAudioButton.setOnClickListener {
+            playFullAudio()
+        }
+        
+        audioSeekBar.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
+                if (fromUser) {
+                    mediaPlayer?.seekTo(progress)
+                }
+            }
+            
+            override fun onStartTrackingTouch(seekBar: SeekBar?) {
+                seekBarUpdateHandler.removeCallbacks(seekBarUpdateRunnable)
+            }
+            
+            override fun onStopTrackingTouch(seekBar: SeekBar?) {
+                mediaPlayer?.let { player ->
+                    if (player.isPlaying) {
+                        seekBarUpdateHandler.postDelayed(seekBarUpdateRunnable, 100)
+                    }
+                }
+            }
+        })
     }
 
     private fun onclick() {
@@ -128,6 +179,16 @@ class MainActivity : AppCompatActivity() {
             pcmSamples.clear()
             audioSegments.clear()
             audioAdapter.notifyDataSetChanged()
+            
+            // Reset full audio UI
+            fullAudioInfoTextView.text = "Duration: 0.00s"
+            playFullAudioButton.isEnabled = false
+            audioSeekBar.isEnabled = false
+            fullAudioFile = null
+            
+            // Create a timestamp for the full recording
+            val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
+            fullAudioFile = File(filesDir, "full_recording_$timestamp.wav")
 
             vad.reset()
             recordingThread = thread(true) {
@@ -135,6 +196,9 @@ class MainActivity : AppCompatActivity() {
             }
             Log.i(TAG, "Started recording")
             onVad(false)
+            
+            // Start updating duration
+            startDurationUpdates()
 
         } else {
             isRecording = false
@@ -146,6 +210,96 @@ class MainActivity : AppCompatActivity() {
             recordButton.setText(R.string.start)
             onVad(false)
             Log.i(TAG, "Stopped recording")
+            
+            // Save full recording
+            saveFullRecording()
+        }
+    }
+    
+    private val durationUpdateHandler = Handler(Looper.getMainLooper())
+    private val durationUpdateRunnable = object : Runnable {
+        override fun run() {
+            if (isRecording) {
+                val durationSec = (System.currentTimeMillis() - recordingStartTime) / 1000.0f
+                fullAudioInfoTextView.text = "Duration: ${String.format("%.2f", durationSec)}s"
+                durationUpdateHandler.postDelayed(this, 100)
+            }
+        }
+    }
+    
+    private fun startDurationUpdates() {
+        durationUpdateHandler.post(durationUpdateRunnable)
+    }
+    
+    private fun saveFullRecording() {
+        synchronized(pcmSamples) {
+            if (pcmSamples.isEmpty()) {
+                Log.e(TAG, "No audio samples to save")
+                return
+            }
+            
+            val samples = pcmSamples.toShortArray()
+            
+            try {
+                writeWavFile(fullAudioFile!!, samples)
+                
+                // Enable the play button and seek bar
+                runOnUiThread {
+                    playFullAudioButton.isEnabled = true
+                    audioSeekBar.isEnabled = true
+                    audioSeekBar.max = (samples.size * 1000) / sampleRateInHz // Length in ms
+                    
+                    val durationSec = samples.size / sampleRateInHz.toFloat()
+                    fullAudioInfoTextView.text = "Duration: ${String.format("%.2f", durationSec)}s (Finished)"
+                }
+                
+                Log.i(TAG, "Full recording saved: ${fullAudioFile!!.absolutePath}")
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to save full recording", e)
+            }
+        }
+    }
+    
+    private fun playFullAudio() {
+        if (fullAudioFile == null || !fullAudioFile!!.exists()) {
+            Log.e(TAG, "Full audio file not available")
+            return
+        }
+        
+        try {
+            mediaPlayer?.release()
+            mediaPlayer = MediaPlayer().apply {
+                setAudioStreamType(AudioManager.STREAM_MUSIC)
+                setDataSource(fullAudioFile!!.absolutePath)
+                setOnCompletionListener {
+                    audioSeekBar.progress = 0
+                    playFullAudioButton.text = "Play"
+                }
+                prepare()
+                start()
+            }
+            
+            // Start updating seek bar
+            audioSeekBar.progress = 0
+            seekBarUpdateHandler.post(seekBarUpdateRunnable)
+            playFullAudioButton.text = "Pause"
+            
+            // Update button text on click
+            playFullAudioButton.setOnClickListener {
+                mediaPlayer?.let { player ->
+                    if (player.isPlaying) {
+                        player.pause()
+                        playFullAudioButton.text = "Play"
+                        seekBarUpdateHandler.removeCallbacks(seekBarUpdateRunnable)
+                    } else {
+                        player.start()
+                        playFullAudioButton.text = "Pause"
+                        seekBarUpdateHandler.post(seekBarUpdateRunnable)
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error playing full audio", e)
         }
     }
 
@@ -349,6 +503,8 @@ class MainActivity : AppCompatActivity() {
         super.onDestroy()
         mediaPlayer?.release()
         mediaPlayer = null
+        durationUpdateHandler.removeCallbacks(durationUpdateRunnable)
+        seekBarUpdateHandler.removeCallbacks(seekBarUpdateRunnable)
     }
     
     data class AudioSegment(
