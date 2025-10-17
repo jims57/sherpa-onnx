@@ -202,6 +202,10 @@ fun getModelConfig(type: Int): OnlineModelConfig? {
                     encoder = "$modelDir/encoder-epoch-99-avg-1.onnx",
                     decoder = "$modelDir/decoder-epoch-99-avg-1.onnx",
                     joiner = "$modelDir/joiner-epoch-99-avg-1.onnx",
+
+//                    encoder = "$modelDir/encoder-epoch-99-avg-1.int8.onnx",
+//                    decoder = "$modelDir/decoder-epoch-99-avg-1.int8.onnx",
+//                    joiner = "$modelDir/joiner-epoch-99-avg-1.int8.onnx",
                 ),
                 tokens = "$modelDir/tokens.txt",
                 modelType = "zipformer",
